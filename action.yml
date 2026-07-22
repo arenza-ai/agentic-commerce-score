@@ -1,0 +1,24 @@
+name: "Agentic Commerce Score"
+description: "Score whether AI shopping agents can find, evaluate, and buy from a store. Fails the job below a threshold."
+branding:
+  icon: "shopping-cart"
+  color: "purple"
+inputs:
+  domain:
+    description: "Store domain to score (e.g. your-store.com)"
+    required: true
+  threshold:
+    description: "Minimum passing score (0-100). Empty = report only."
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Run Agentic Commerce Score
+      shell: bash
+      run: |
+        ARGS="${{ inputs.domain }}"
+        if [ -n "${{ inputs.threshold }}" ]; then
+          ARGS="$ARGS --threshold ${{ inputs.threshold }}"
+        fi
+        npx --yes github:arenza-ai/agentic-commerce-score $ARGS

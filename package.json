@@ -1,0 +1,59 @@
+{
+  "name": "agentic-commerce-score",
+  "version": "0.1.0",
+  "description": "Agentic Commerce Score (ACS) — can AI shopping agents find, evaluate, and buy from your store? Deterministic 0-100 audit: AI-crawler access, product feed quality, Product JSON-LD, and agentic-checkout readiness (ACP / UCP prerequisites). Zero dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "bin": {
+    "acs": "./dist/cli.js",
+    "agentic-commerce-score": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "SCORE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/",
+    "prepack": "npm run build",
+    "prepare": "npm run build",
+    "scan": "npm run build && node dist/scripts/scan-batch.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arenza-ai/agentic-commerce-score.git"
+  },
+  "homepage": "https://arenza.ai/agentic-commerce-score",
+  "bugs": {
+    "url": "https://github.com/arenza-ai/agentic-commerce-score/issues"
+  },
+  "author": "Arenza (https://arenza.ai)",
+  "keywords": [
+    "agentic-commerce",
+    "acp",
+    "ucp",
+    "chatgpt-shopping",
+    "ai-shopping-agents",
+    "geo",
+    "aeo",
+    "generative-engine-optimization",
+    "llms-txt",
+    "shopify",
+    "ecommerce-audit",
+    "ai-visibility"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.5.0"
+  }
+}
