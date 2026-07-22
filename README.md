@@ -8,26 +8,31 @@ One command, ~8 GET requests, a deterministic 0–100 answer:
 npx agentic-commerce-score your-store.com
 ```
 
+Real output (allbirds.com, scanned 2026-07-23 — rerun it yourself, it's deterministic):
+
 ```text
-  Agentic Commerce Score v0.1  ·  your-store.com
+  Agentic Commerce Score v0.1  ·  allbirds.com
 
-  72/100  grade B   not agent-buyable ✗   platform: shopify
+  89/100  grade A   agent-buyable ✓   platform: shopify
 
-   83  ████████████████░░░░  Discover — can agents fetch + read the store? (35%)
-   74  ██████████████░░░░░░  Evaluate — can agents parse + trust the products? (40%)
-   55  ███████████░░░░░░░░░  Transact — can an agent complete a purchase? (25%)
+  100  ████████████████████  Discover — can agents fetch + read the store? (35%)
+   73  ███████████████░░░░░  Evaluate — can agents parse + trust the products? (40%)
+  100  ████████████████████  Transact — can an agent complete a purchase? (25%)
 
+  ✓ AI crawlers allowed (robots.txt)
+  ✓ llms.txt present
+  ✓ Homepage readable without JavaScript
+      Homepage serves ~17291 visible words of real HTML (no JS needed).
+  ✓ Catalog required fields (title/image/price/description)
+      Coverage over 100 products: title 100% · image 100% · price 100% · description 100% (avg 100%).
   ✗ Product JSON-LD (Offer: price/currency/availability)
-      Product schema present but incomplete — missing: availability; no AggregateRating.
-  ! llms.txt present
-      No /llms.txt (emerging convention — counted as a soft gap, not a blocker).
-  ✗ Shipping + returns policies discoverable
-      Shipping policy found · returns/refund policy not found.
+      No Product JSON-LD on the sampled product page.
+  ✓ Machine-readable price + availability
+      Feed exposes price on 100% and availability on 100% of products.
   …
 
   Top fixes
   1. Add complete Product JSON-LD on product pages: Offer with price + priceCurrency + availability…
-  2. Publish shipping + returns policy pages at stable URLs…
 ```
 
 ## Why this exists
@@ -85,9 +90,15 @@ Zero runtime dependencies. Node ≥ 18.17.
 - **Not an enrollment checker.** Protocol enrollment is private merchant state; ACS scores the externally verifiable prerequisites and says so (see SCORE.md, principle 2).
 - **Not SEO advice.** Several checks overlap with classic SEO hygiene, but the lens is strictly "what does a buying agent need".
 
-## Dataset
+## Dataset — State of Agentic Commerce
 
-`data/` carries the **State of Agentic Commerce** scans — periodic ACS runs over leading DTC storefronts (methodology in the dataset README, summary at <https://arenza.ai/agentic-commerce-score>). PRs adding stores to the candidate list are welcome.
+`data/` carries periodic ACS scans of leading DTC storefronts. **2026-07:** of
+857 Shopify-detected storefronts (from 955 public-list candidates), **81% are
+agent-buyable**; the top gaps are incomplete Product JSON-LD (13% fail),
+closed/absent product feeds (10%), and thin descriptions (8%). Mean score 90,
+median 97 — the failing tail includes household names. Full methodology +
+per-store breakdowns: <https://arenza.ai/agentic-commerce-score/report>. PRs
+adding stores to the candidate list are welcome.
 
 ## Contributing
 
