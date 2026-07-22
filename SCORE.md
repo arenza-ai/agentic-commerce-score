@@ -76,6 +76,7 @@ A ≥85 · B 70–84 · C 55–69 · D 40–54 · F <40.
 - **Currency correctness isn't validated**, only machine-readability.
 - **Region eligibility** (protocol rollouts are US-led as of mid-2026) is out of scope.
 - Feed sampling caps at 100 products; very large catalogs are scored on that sample.
+- **Stores without an open feed get no product-page sample in v0.1** (the product URL comes from the feed), so their page-level schema is reported as unverified — never claimed absent. Sitemap-based product-URL discovery is planned for v0.2.
 
 ## Versioning
 

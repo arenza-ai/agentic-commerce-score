@@ -147,9 +147,14 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
     } else if (productFacts?.productSchema.hasProduct) {
       status = 'warn';
       detail = 'No open product feed — agents must crawl page-by-page (Product JSON-LD found on product page).';
-    } else {
+    } else if (productFacts) {
       status = 'fail';
-      detail = 'No open product feed and no Product JSON-LD found — no machine-readable catalog surface detected.';
+      detail = 'No open product feed, and the sampled product page carries no Product JSON-LD.';
+    } else {
+      // Honest scoping: with no feed we had no product URL to sample, so we
+      // can verify the feed's absence but NOT what product pages carry.
+      status = 'fail';
+      detail = 'No open product feed detected (catalog endpoint closed or absent). No product URL was discoverable to sample, so page-level schema is unverified.';
     }
     checks.push(toCheck({ id: 'open_feed', label: 'Machine-readable product catalog', pillar: 'evaluate', weight: 10, status, detail }));
   }
