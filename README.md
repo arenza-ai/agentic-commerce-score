@@ -8,31 +8,32 @@ One command, ~8 GET requests, a deterministic 0–100 answer:
 npx agentic-commerce-score your-store.com
 ```
 
-Real output (allbirds.com, scanned 2026-07-23 — rerun it yourself, it's deterministic):
+Real output (allbirds.com, scanned 2026-07-23 with rubric v0.2 — rerun it yourself, it's deterministic):
 
 ```text
-  Agentic Commerce Score v0.1  ·  allbirds.com
+  Agentic Commerce Score v0.2  ·  allbirds.com
 
-  89/100  grade A   agent-buyable ✓   platform: shopify
+  82/100  grade B   agent-buyable ✓   platform: shopify
 
-  100  ████████████████████  Discover — can agents fetch + read the store? (35%)
-   73  ███████████████░░░░░  Evaluate — can agents parse + trust the products? (40%)
+  100  ████████████████████  Discover — can agents fetch + read the store? (30%)
+   60  ████████████░░░░░░░░  Evaluate — can agents parse + trust the products? (45%)
   100  ████████████████████  Transact — can an agent complete a purchase? (25%)
 
   ✓ AI crawlers allowed (robots.txt)
-  ✓ llms.txt present
   ✓ Homepage readable without JavaScript
       Homepage serves ~17291 visible words of real HTML (no JS needed).
-  ✓ Catalog required fields (title/image/price/description)
-      Coverage over 100 products: title 100% · image 100% · price 100% · description 100% (avg 100%).
+  ✓ Required fields (title/image/price/description)
+      Coverage over 100 feed products: title 100% · image 100% · price 100% · description 100% (avg 100%).
   ✗ Product JSON-LD (Offer: price/currency/availability)
-      No Product JSON-LD on the sampled product page.
+      0/3 sampled product pages carry Product JSON-LD with a complete Offer.
+  ✗ Brand + product identifier (sku/gtin/mpn)
   ✓ Machine-readable price + availability
       Feed exposes price on 100% and availability on 100% of products.
   …
 
   Top fixes
-  1. Add complete Product JSON-LD on product pages: Offer with price + priceCurrency + availability…
+  1. Add complete Product JSON-LD on product pages: an Offer with price + priceCurrency + availability.
+  2. Publish brand plus a product identifier (sku / gtin / mpn) — agents match and dedupe by identifier…
 ```
 
 ## Why this exists
@@ -45,9 +46,11 @@ Most stores were built for human eyeballs and Googlebot — not for buying agent
 
 | Pillar | Question | Checks |
 |---|---|---|
-| **Discover** (35) | Can agents fetch + read the store? | robots.txt AI-crawler access · llms.txt · sitemap · renders without JS |
-| **Evaluate** (40) | Can agents parse + trust the products? | open product feed · required fields (title/image/price/description) · title quality · description depth · Product JSON-LD with complete Offer |
-| **Transact** (25) | Can an agent complete a purchase? | agentic-checkout rail (platform prerequisite) · machine-readable price + availability · shipping & returns policies |
+| **Discover** (30) | Can agents fetch + read the store? | robots.txt AI-crawler access · renders without JS · sitemap · llms.txt |
+| **Evaluate** (45) | Can agents parse + trust the products? | required fields (title/image/price/description) · Product JSON-LD with complete Offer · brand + identifier (sku/gtin/mpn) · machine-readable catalog · AggregateRating · image alt text · description depth |
+| **Transact** (25) | Can an agent complete a purchase? | shipping + returns policies **with terms** · machine-readable price + availability · per-variant stock · agentic-checkout rail |
+
+Product-page checks sample **3 pages**, discovered from the feed or — when the feed is closed — from the sitemap, so a locked-down catalog is scored on real evidence instead of collapsing to zero.
 
 Full rubric with every threshold: **[SCORE.md](./SCORE.md)**. Deterministic and honest by construction: public data only, no LLM in the scoring path, prerequisites — never claimed "enrollment".
 

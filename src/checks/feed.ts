@@ -43,7 +43,7 @@ interface RawProduct {
   variants?: unknown;
 }
 
-function normalizeProduct(raw: RawProduct): PublicProduct {
+function normalizeProduct(raw: RawProduct & { vendor?: unknown }): PublicProduct {
   const title = typeof raw.title === 'string' ? raw.title.trim() : '';
   const handle = typeof raw.handle === 'string' ? raw.handle : '';
   const descriptionText = typeof raw.body_html === 'string' ? stripHtml(raw.body_html) : '';
@@ -68,6 +68,11 @@ function normalizeProduct(raw: RawProduct): PublicProduct {
     if (Number.isFinite(cmpN) && Number.isFinite(p) && cmpN > p) hasCompareAtDiscount = true;
   }
 
+  const vendor = typeof (raw as { vendor?: unknown }).vendor === 'string' ? String((raw as { vendor?: unknown }).vendor).trim() : '';
+  const hasSku = variants.some((v) => typeof v.sku === 'string' && v.sku.trim().length > 0);
+  const variantAvailabilityComplete =
+    variants.length > 0 && variants.every((v) => typeof v.available === 'boolean');
+
   return {
     title,
     handle,
@@ -78,6 +83,9 @@ function normalizeProduct(raw: RawProduct): PublicProduct {
     price,
     available,
     hasCompareAtDiscount,
+    vendor,
+    hasSku,
+    variantAvailabilityComplete,
   };
 }
 
@@ -100,6 +108,9 @@ export function buildFeedInfo(url: string, rawProducts: RawProduct[]): FeedInfo 
   return {
     url,
     productCount: n,
+    brandPct: pct(products.filter((p) => p.vendor.length > 0).length),
+    variantAvailabilityPct: pct(products.filter((p) => p.variantAvailabilityComplete).length),
+    skuPct: pct(products.filter((p) => p.hasSku).length),
     coverage: {
       title: pct(products.filter((p) => p.title.length > 0).length),
       image: pct(products.filter((p) => p.imageCount > 0).length),
@@ -115,10 +126,21 @@ export function buildFeedInfo(url: string, rawProducts: RawProduct[]): FeedInfo 
   };
 }
 
-/** Fetch + parse the open product feed. Returns null when absent/unparseable. */
+/**
+ * Fetch + parse the open product feed. Returns null when absent/unparseable.
+ *
+ * v0.2 retries once on a transport failure or 429/5xx: probing real storefronts
+ * showed intermittent refusals on feeds that are genuinely open, and a false
+ * "no feed" verdict is the single most expensive error this scanner can make.
+ */
 export async function fetchFeed(domain: string, timeoutMs?: number): Promise<{ feed: FeedInfo | null; error?: string }> {
   const url = `https://${domain}/products.json?limit=100`;
-  const res = await fetchText(url, timeoutMs);
+  let res = await fetchText(url, timeoutMs);
+  const transient = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
+  if (transient) {
+    await new Promise((r) => setTimeout(r, 800));
+    res = await fetchText(url, timeoutMs);
+  }
   if (!res.ok) return { feed: null, error: res.error ? `products.json: ${res.error}` : undefined };
   try {
     const data = JSON.parse(res.text) as { products?: RawProduct[] };

@@ -11,7 +11,7 @@ import { parseArgs } from 'node:util';
 import { runScore } from './index.js';
 import { renderReport } from './report.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 const HELP = `agentic-commerce-score v${VERSION}
 Can AI shopping agents find, evaluate, and buy from your store?

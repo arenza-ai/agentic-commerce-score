@@ -33,6 +33,14 @@ export interface PillarResult {
   score: number;
   /** Max points of the pillar within the 100-point total. */
   weight: number;
+  /**
+   * Share of the pillar's weight that could actually be evaluated, 0-100.
+   * v0.2 guard: when this drops below 50 the pillar score rests on too little
+   * evidence to be meaningful, and `insufficientEvidence` is set so readers
+   * (and the dataset) can see it rather than trusting a redistributed number.
+   */
+  evidenceCoverage: number;
+  insufficientEvidence: boolean;
   checks: Check[];
 }
 
@@ -56,6 +64,8 @@ export interface ScoreResult {
   pillars: PillarResult[];
   platform: PlatformInfo;
   feed: FeedInfo | null;
+  /** How many product pages were sampled, and how they were found. */
+  productSampling: { sampled: number; source: 'feed' | 'sitemap' | 'none' };
   /** Top fixes ordered by (severity, weight). */
   fixes: string[];
   /** Non-fatal fetch errors encountered during the scan (transparency). */
@@ -81,11 +91,21 @@ export interface PublicProduct {
   price: number | null;
   available: boolean | null;
   hasCompareAtDiscount: boolean;
+  vendor: string;
+  hasSku: boolean;
+  /** Every variant exposes an `available` boolean (per-variant stock is readable). */
+  variantAvailabilityComplete: boolean;
 }
 
 export interface FeedInfo {
   url: string;
   productCount: number;
+  /** Share of products exposing a vendor/brand (0-100) — agents match on brand. */
+  brandPct: number;
+  /** Share of products whose variants expose machine-readable availability (0-100). */
+  variantAvailabilityPct: number;
+  /** Share of products exposing a SKU on at least one variant (0-100). */
+  skuPct: number;
   /** Field coverage percentages over sampled products (0-100). */
   coverage: {
     title: number;
@@ -105,6 +125,16 @@ export interface FeedInfo {
   sampledProducts: PublicProduct[];
 }
 
+/** Policy evidence: existence is not enough — protocols surface real terms. */
+export interface PolicyEvidence {
+  /** Page fetched with substantive content (not a stub / soft-404). */
+  found: boolean;
+  /** Content was actually fetched and read (vs merely a link on the homepage). */
+  verified: boolean;
+  /** Returns only: an explicit window ("within 30 days") is machine-readable. */
+  hasWindow?: boolean;
+}
+
 /** Everything fetched for one store — input to the pure scoring layer. */
 export interface StoreSnapshot {
   domain: string;
@@ -113,9 +143,12 @@ export interface StoreSnapshot {
   llmsTxt: boolean;
   sitemapOk: boolean;
   feed: FeedInfo | null;
-  productPage: FetchedPage | null;
-  shippingPolicyFound: boolean;
-  returnsPolicyFound: boolean;
+  /** Up to 3 sampled product pages (from feed handles or the sitemap). */
+  productPages: FetchedPage[];
+  /** How the product pages were found — reported for transparency. */
+  productSource: 'feed' | 'sitemap' | 'none';
+  shipping: PolicyEvidence;
+  returns: PolicyEvidence;
   fetchErrors: string[];
 }
 

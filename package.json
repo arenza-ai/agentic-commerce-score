@@ -1,7 +1,7 @@
 {
   "name": "agentic-commerce-score",
-  "version": "0.1.0",
-  "description": "Agentic Commerce Score (ACS) — can AI shopping agents find, evaluate, and buy from your store? Deterministic 0-100 audit: AI-crawler access, product feed quality, Product JSON-LD, and agentic-checkout readiness (ACP / UCP prerequisites). Zero dependencies.",
+  "version": "0.2.0",
+  "description": "Agentic Commerce Score (ACS) — can AI shopping agents find, evaluate, and buy from your store? Deterministic 0-100 audit: AI-crawler access, catalog machine-readability, Product JSON-LD completeness (Offer / identifiers / ratings), per-variant stock, and policy terms. Zero dependencies.",
   "type": "module",
   "license": "MIT",
   "engines": {

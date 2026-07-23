@@ -3,14 +3,27 @@
  * same snapshot always yields the same score (unit-testable with zero network).
  * Weights + thresholds are the normative rubric; SCORE.md documents them and
  * MUST be updated in the same commit as any change here (rubricVersion bump).
+ *
+ * v0.2 (see SCORE.md changelog) fixes three structural defects found by
+ * auditing the v0.1 dataset:
+ *   1. Page-level checks used to go n/a whenever a store had no open feed, so
+ *      ONE check decided a 40-point pillar. Product pages are now discovered
+ *      from the sitemap too, and pillars report `evidenceCoverage`.
+ *   2. Over half the v0.1 scale was a near-constant on Shopify storefronts
+ *      (checkout_rail alone passed 100% of the time, contributing zero
+ *      information for 10 points). Constants are down-weighted and replaced
+ *      with checks stores actually differ on.
+ *   3. `title_quality` warned 73% of stores and failed none — an unfalsifiable
+ *      check masquerading as a measurement. Removed.
  */
 
 import type { Check, Grade, PillarResult, ScoreResult, StoreSnapshot } from './types.js';
 import { analyzeRobots } from './checks/site.js';
 import { analyzePage, type PageFacts } from './checks/page.js';
 import { detectPlatform } from './checks/platform.js';
+import { buildProductEvidence } from './checks/product-page.js';
 
-export const RUBRIC_VERSION = '0.1';
+export const RUBRIC_VERSION = '0.2';
 
 const FIX_HINTS: Record<string, string> = {
   robots_ai_access:
@@ -19,21 +32,27 @@ const FIX_HINTS: Record<string, string> = {
   sitemap: 'Publish /sitemap.xml (and declare it in robots.txt) so agents can enumerate your catalog.',
   homepage_renders:
     'Serve real HTML without JavaScript: agent fetchers read the raw response. Pre-render or SSR your storefront.',
-  open_feed:
-    'Expose a machine-readable product catalog. On Shopify keep /products.json open; elsewhere publish a product feed agents can parse.',
+  catalog_machine_readable:
+    'Give agents a machine-readable catalog: keep an open product feed (on Shopify, /products.json) or at minimum ship complete Product JSON-LD on crawlable product pages.',
   catalog_required_fields:
     'Fill the four required catalog fields on every product: title, image, price, description — a product missing one drops out of agent answers.',
-  title_quality:
-    'Rewrite product titles with literal, matchable language ("insulated 12oz steel bottle"), not marketing names; drop ALL-CAPS and slogan phrasing.',
   description_depth: 'Bring product descriptions to 120+ chars of concrete, quotable substance.',
   product_schema:
-    'Add complete Product JSON-LD on product pages: Offer with price + priceCurrency + availability, plus AggregateRating when you have reviews.',
+    'Add complete Product JSON-LD on product pages: an Offer with price + priceCurrency + availability.',
+  product_identifiers:
+    'Publish brand plus a product identifier (sku / gtin / mpn) in Product JSON-LD — agents match, dedupe and price-compare products by identifier; without one your listing is an orphan.',
+  rating_schema:
+    'Expose reviews as AggregateRating in Product JSON-LD (ratingValue + reviewCount) — agents quote ratings when ranking options, and skip products that have none they can read.',
+  image_alt:
+    'Write descriptive alt text on product images — it is the only thing a text-mode agent can read about your photography.',
   checkout_rail:
     'Move onto (or integrate) an agentic-checkout rail: Shopify stores ride ChatGPT checkout + Google catalog rails; custom stacks need a direct ACP integration.',
   machine_price_availability:
     'Expose machine-readable price AND availability per product (feed fields or Offer schema) — agents will not guess stock.',
+  variant_availability:
+    'Expose stock per variant (size/colour), not just per product — an agent that cannot tell which variant is in stock will not complete the order.',
   policies:
-    'Publish shipping + returns policy pages at stable URLs — agents surface (and protocols require) merchant policies before completing checkout.',
+    'Publish shipping and returns policies as real pages with concrete terms (state the return window in days) — agentic checkout surfaces merchant policies before completing a purchase.',
 };
 
 interface CheckSpec {
@@ -58,20 +77,25 @@ function gradeFor(score: number): Grade {
   return 'F';
 }
 
+/** pass ≥ hi · warn ≥ lo · else fail. */
+function band(value: number, hi: number, lo: number): Check['status'] {
+  return value >= hi ? 'pass' : value >= lo ? 'warn' : 'fail';
+}
+
 export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
   const robots = analyzeRobots(snapshot.robotsTxt);
   const homeFacts: PageFacts | null = snapshot.homepage
     ? analyzePage(snapshot.homepage.html, snapshot.homepage.finalUrl)
     : null;
-  const productFacts: PageFacts | null = snapshot.productPage
-    ? analyzePage(snapshot.productPage.html, snapshot.productPage.finalUrl)
-    : null;
+  const evidence = buildProductEvidence(snapshot.productPages);
   const platform = detectPlatform(snapshot.homepage?.html ?? null, snapshot.feed !== null);
   const feed = snapshot.feed;
+  const sampled = evidence.sampled;
+  const pagePct = (n: number) => (sampled > 0 ? Math.round((100 * n) / sampled) : 0);
 
   const checks: Check[] = [];
 
-  // ---------------- DISCOVER ----------------
+  // ---------------- DISCOVER (30) ----------------
   {
     let status: Check['status'];
     let detail: string;
@@ -92,26 +116,6 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
     }
     checks.push(toCheck({ id: 'robots_ai_access', label: 'AI crawlers allowed (robots.txt)', pillar: 'discover', weight: 12, status, detail }));
   }
-  checks.push(
-    toCheck({
-      id: 'llms_txt',
-      label: 'llms.txt present',
-      pillar: 'discover',
-      weight: 5,
-      status: snapshot.llmsTxt ? 'pass' : 'warn',
-      detail: snapshot.llmsTxt ? '/llms.txt found.' : 'No /llms.txt (emerging convention — counted as a soft gap, not a blocker).',
-    }),
-  );
-  checks.push(
-    toCheck({
-      id: 'sitemap',
-      label: 'Sitemap discoverable',
-      pillar: 'discover',
-      weight: 6,
-      status: snapshot.sitemapOk ? 'pass' : 'fail',
-      detail: snapshot.sitemapOk ? 'Sitemap found.' : 'No sitemap found at /sitemap.xml or declared in robots.txt.',
-    }),
-  );
   {
     let status: Check['status'];
     let detail: string;
@@ -134,115 +138,159 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
       status = 'pass';
       detail = `Homepage serves ~${homeFacts.visibleWords} visible words of real HTML (no JS needed).`;
     }
-    checks.push(toCheck({ id: 'homepage_renders', label: 'Homepage readable without JavaScript', pillar: 'discover', weight: 12, status, detail }));
+    checks.push(toCheck({ id: 'homepage_renders', label: 'Homepage readable without JavaScript', pillar: 'discover', weight: 10, status, detail }));
   }
+  checks.push(
+    toCheck({
+      id: 'sitemap',
+      label: 'Sitemap discoverable',
+      pillar: 'discover',
+      weight: 5,
+      status: snapshot.sitemapOk ? 'pass' : 'fail',
+      detail: snapshot.sitemapOk ? 'Sitemap found.' : 'No sitemap found at /sitemap.xml or declared in robots.txt.',
+    }),
+  );
+  checks.push(
+    toCheck({
+      id: 'llms_txt',
+      label: 'llms.txt present',
+      pillar: 'discover',
+      weight: 3,
+      status: snapshot.llmsTxt ? 'pass' : 'warn',
+      detail: snapshot.llmsTxt ? '/llms.txt found.' : 'No /llms.txt (emerging convention — counted as a soft gap, not a blocker).',
+    }),
+  );
 
-  // ---------------- EVALUATE ----------------
+  // ---------------- EVALUATE (45) ----------------
   {
     let status: Check['status'];
     let detail: string;
+    const schemaPct = pagePct(evidence.withCompleteOffer);
     if (feed) {
       status = 'pass';
       detail = `Open product feed at ${feed.url} (${feed.productCount} products sampled).`;
-    } else if (productFacts?.productSchema.hasProduct) {
+    } else if (sampled > 0 && schemaPct >= 50) {
       status = 'warn';
-      detail = 'No open product feed — agents must crawl page-by-page (Product JSON-LD found on product page).';
-    } else if (productFacts) {
+      detail = `No open product feed — agents must crawl page-by-page; ${evidence.withCompleteOffer}/${sampled} sampled product pages carry complete Product JSON-LD.`;
+    } else if (sampled > 0) {
       status = 'fail';
-      detail = 'No open product feed, and the sampled product page carries no Product JSON-LD.';
+      detail = `No open product feed, and only ${evidence.withCompleteOffer}/${sampled} sampled product pages carry complete Product JSON-LD — agents have no reliable catalog surface.`;
     } else {
-      // Honest scoping: with no feed we had no product URL to sample, so we
-      // can verify the feed's absence but NOT what product pages carry.
       status = 'fail';
-      detail = 'No open product feed detected (catalog endpoint closed or absent). No product URL was discoverable to sample, so page-level schema is unverified.';
+      detail = 'No open product feed and no product pages discoverable via sitemap — no machine-readable catalog surface found.';
     }
-    checks.push(toCheck({ id: 'open_feed', label: 'Machine-readable product catalog', pillar: 'evaluate', weight: 10, status, detail }));
+    checks.push(toCheck({ id: 'catalog_machine_readable', label: 'Machine-readable product catalog', pillar: 'evaluate', weight: 5, status, detail }));
   }
   {
     let spec: CheckSpec;
-    if (!feed) {
-      spec = { id: 'catalog_required_fields', label: 'Catalog required fields (title/image/price/description)', pillar: 'evaluate', weight: 12, status: 'na', detail: 'No open feed to sample.' };
-    } else {
+    if (feed) {
       const c = feed.coverage;
       const avg = Math.round((c.title + c.image + c.price + c.description) / 4);
-      const status: Check['status'] = avg >= 90 ? 'pass' : avg >= 60 ? 'warn' : 'fail';
       spec = {
         id: 'catalog_required_fields',
-        label: 'Catalog required fields (title/image/price/description)',
+        label: 'Required fields (title/image/price/description)',
         pillar: 'evaluate',
         weight: 12,
-        status,
-        detail: `Coverage over ${feed.productCount} products: title ${c.title}% · image ${c.image}% · price ${c.price}% · description ${c.description}% (avg ${avg}%).`,
+        status: band(avg, 90, 60),
+        detail: `Coverage over ${feed.productCount} feed products: title ${c.title}% · image ${c.image}% · price ${c.price}% · description ${c.description}% (avg ${avg}%).`,
       };
-    }
-    checks.push(toCheck(spec));
-  }
-  {
-    let spec: CheckSpec;
-    if (!feed) {
-      spec = { id: 'title_quality', label: 'Title quality (literal, matchable)', pillar: 'evaluate', weight: 6, status: 'na', detail: 'No open feed to sample.' };
-    } else {
-      const status: Check['status'] = feed.titleFluffPct >= 25 ? 'fail' : feed.titleFluffPct >= 10 || feed.titleLiteralPct < 15 ? 'warn' : 'pass';
+    } else if (sampled > 0) {
       spec = {
-        id: 'title_quality',
-        label: 'Title quality (literal, matchable)',
+        id: 'catalog_required_fields',
+        label: 'Required fields (title/image/price/description)',
         pillar: 'evaluate',
-        weight: 6,
-        status,
-        detail: `${feed.titleLiteralPct}% of titles carry a literal descriptor/spec; ${feed.titleFluffPct}% read as marketing slogans.`,
+        weight: 12,
+        status: band(evidence.requiredFieldPct, 90, 60),
+        detail: `No feed; from ${sampled} sampled product page(s), Product JSON-LD carries ${evidence.requiredFieldPct}% of the four required fields on average.`,
       };
+    } else {
+      spec = { id: 'catalog_required_fields', label: 'Required fields (title/image/price/description)', pillar: 'evaluate', weight: 12, status: 'na', detail: 'No feed and no product page could be sampled.' };
     }
     checks.push(toCheck(spec));
   }
   {
+    const pct = pagePct(evidence.withCompleteOffer);
+    const spec: CheckSpec = sampled === 0
+      ? { id: 'product_schema', label: 'Product JSON-LD (Offer: price/currency/availability)', pillar: 'evaluate', weight: 10, status: 'na', detail: 'No product page could be sampled.' }
+      : {
+          id: 'product_schema',
+          label: 'Product JSON-LD (Offer: price/currency/availability)',
+          pillar: 'evaluate',
+          weight: 10,
+          status: band(pct, 100, 50),
+          detail: `${evidence.withCompleteOffer}/${sampled} sampled product page(s) carry Product JSON-LD with a complete Offer (price + priceCurrency + availability); ${evidence.withProductSchema}/${sampled} carry any Product schema.`,
+        };
+    checks.push(toCheck(spec));
+  }
+  {
+    const pct = pagePct(evidence.withIdentifiers);
+    const spec: CheckSpec = sampled === 0
+      ? { id: 'product_identifiers', label: 'Brand + product identifier (sku/gtin/mpn)', pillar: 'evaluate', weight: 6, status: 'na', detail: 'No product page could be sampled.' }
+      : {
+          id: 'product_identifiers',
+          label: 'Brand + product identifier (sku/gtin/mpn)',
+          pillar: 'evaluate',
+          weight: 6,
+          status: band(pct, 100, 50),
+          detail: `${evidence.withIdentifiers}/${sampled} sampled product page(s) expose both brand and an identifier (sku/gtin/mpn); brand alone on ${evidence.withBrand}/${sampled}.`,
+        };
+    checks.push(toCheck(spec));
+  }
+  {
+    const pct = pagePct(evidence.withRating);
+    const spec: CheckSpec = sampled === 0
+      ? { id: 'rating_schema', label: 'AggregateRating in Product JSON-LD', pillar: 'evaluate', weight: 5, status: 'na', detail: 'No product page could be sampled.' }
+      : {
+          id: 'rating_schema',
+          label: 'AggregateRating in Product JSON-LD',
+          pillar: 'evaluate',
+          weight: 5,
+          status: band(pct, 100, 50),
+          detail: `${evidence.withRating}/${sampled} sampled product page(s) expose machine-readable review ratings.`,
+        };
+    checks.push(toCheck(spec));
+  }
+  {
+    const spec: CheckSpec = sampled === 0
+      ? { id: 'image_alt', label: 'Product image alt text', pillar: 'evaluate', weight: 4, status: 'na', detail: 'No product page could be sampled.' }
+      : {
+          id: 'image_alt',
+          label: 'Product image alt text',
+          pillar: 'evaluate',
+          weight: 4,
+          status: band(evidence.imageAltPct, 80, 40),
+          detail: `${evidence.imageAltPct}% of content images on sampled product page(s) carry non-empty alt text.`,
+        };
+    checks.push(toCheck(spec));
+  }
+  {
     let spec: CheckSpec;
-    if (!feed) {
-      spec = { id: 'description_depth', label: 'Description depth (≥120 chars)', pillar: 'evaluate', weight: 4, status: 'na', detail: 'No open feed to sample.' };
-    } else {
-      const status: Check['status'] = feed.descriptionDepthPct >= 70 ? 'pass' : feed.descriptionDepthPct >= 40 ? 'warn' : 'fail';
+    if (feed) {
       spec = {
         id: 'description_depth',
         label: 'Description depth (≥120 chars)',
         pillar: 'evaluate',
-        weight: 4,
-        status,
-        detail: `${feed.descriptionDepthPct}% of products have a description agents can actually quote (≥120 chars).`,
+        weight: 3,
+        status: band(feed.descriptionDepthPct, 70, 40),
+        detail: `${feed.descriptionDepthPct}% of feed products have a description agents can quote (≥120 chars).`,
       };
-    }
-    checks.push(toCheck(spec));
-  }
-  {
-    let spec: CheckSpec;
-    if (!productFacts) {
-      spec = { id: 'product_schema', label: 'Product JSON-LD (Offer: price/currency/availability)', pillar: 'evaluate', weight: 8, status: 'na', detail: 'No product page fetched.' };
-    } else {
-      const ps = productFacts.productSchema;
-      const complete = ps.hasProduct && ps.hasOffer && ps.offerHasPrice && ps.offerHasCurrency && ps.offerHasAvailability;
-      const status: Check['status'] = complete ? 'pass' : ps.hasProduct ? 'warn' : 'fail';
-      const missing: string[] = [];
-      if (!ps.hasOffer) missing.push('Offer');
-      else {
-        if (!ps.offerHasPrice) missing.push('price');
-        if (!ps.offerHasCurrency) missing.push('priceCurrency');
-        if (!ps.offerHasAvailability) missing.push('availability');
-      }
+    } else if (sampled > 0) {
+      const pct = pagePct(evidence.withDeepDescription);
       spec = {
-        id: 'product_schema',
-        label: 'Product JSON-LD (Offer: price/currency/availability)',
+        id: 'description_depth',
+        label: 'Description depth (≥120 chars)',
         pillar: 'evaluate',
-        weight: 8,
-        status,
-        detail: !ps.hasProduct
-          ? 'No Product JSON-LD on the sampled product page.'
-          : complete
-            ? `Complete Product schema${ps.hasAggregateRating ? ' incl. AggregateRating' : ''} (rating schema ${ps.hasAggregateRating ? 'present' : 'absent'}).`
-            : `Product schema present but incomplete — missing: ${missing.join(', ')}${ps.hasAggregateRating ? '' : '; no AggregateRating'}.`,
+        weight: 3,
+        status: band(pct, 70, 40),
+        detail: `${evidence.withDeepDescription}/${sampled} sampled product page(s) expose a quotable description (≥120 chars) in Product JSON-LD.`,
       };
+    } else {
+      spec = { id: 'description_depth', label: 'Description depth (≥120 chars)', pillar: 'evaluate', weight: 3, status: 'na', detail: 'No feed and no product page could be sampled.' };
     }
     checks.push(toCheck(spec));
   }
 
-  // ---------------- TRANSACT ----------------
+  // ---------------- TRANSACT (25) ----------------
   {
     const status: Check['status'] =
       platform.agenticCheckoutRail === 'native' ? 'pass' : platform.agenticCheckoutRail === 'partial' ? 'warn' : 'fail';
@@ -251,7 +299,7 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
         id: 'checkout_rail',
         label: 'Agentic-checkout rail (platform prerequisite)',
         pillar: 'transact',
-        weight: 10,
+        weight: 5,
         status,
         detail: `Platform: ${platform.name}. ${platform.evidence}`,
       }),
@@ -262,79 +310,129 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
     if (feed) {
       const priceOk = feed.coverage.price;
       const availOk = feed.availabilityPct;
-      const status: Check['status'] = priceOk >= 90 && availOk >= 90 ? 'pass' : priceOk >= 60 && availOk >= 60 ? 'warn' : 'fail';
+      const worst = Math.min(priceOk, availOk);
       spec = {
         id: 'machine_price_availability',
         label: 'Machine-readable price + availability',
         pillar: 'transact',
-        weight: 7,
-        status,
+        weight: 6,
+        status: band(worst, 90, 60),
         detail: `Feed exposes price on ${priceOk}% and availability on ${availOk}% of products.`,
       };
-    } else if (productFacts) {
-      const ps = productFacts.productSchema;
-      const status: Check['status'] = ps.offerHasPrice && ps.offerHasAvailability ? 'pass' : ps.offerHasPrice || ps.offerHasAvailability ? 'warn' : 'fail';
+    } else if (sampled > 0) {
+      const pct = pagePct(evidence.withCompleteOffer);
       spec = {
         id: 'machine_price_availability',
         label: 'Machine-readable price + availability',
         pillar: 'transact',
-        weight: 7,
-        status,
-        detail: `Via Offer schema: price=${ps.offerHasPrice}, availability=${ps.offerHasAvailability} (no open feed).`,
+        weight: 6,
+        status: band(pct, 100, 50),
+        detail: `No feed; ${evidence.withCompleteOffer}/${sampled} sampled product page(s) expose price + availability via Offer schema.`,
       };
     } else {
-      spec = { id: 'machine_price_availability', label: 'Machine-readable price + availability', pillar: 'transact', weight: 7, status: 'na', detail: 'No feed or product page available.' };
+      spec = { id: 'machine_price_availability', label: 'Machine-readable price + availability', pillar: 'transact', weight: 6, status: 'na', detail: 'No feed and no product page could be sampled.' };
     }
     checks.push(toCheck(spec));
   }
   {
-    const s = snapshot.shippingPolicyFound;
-    const r = snapshot.returnsPolicyFound;
-    const status: Check['status'] = s && r ? 'pass' : s || r ? 'warn' : 'fail';
-    checks.push(
-      toCheck({
-        id: 'policies',
-        label: 'Shipping + returns policies discoverable',
+    let spec: CheckSpec;
+    if (feed) {
+      spec = {
+        id: 'variant_availability',
+        label: 'Per-variant stock readable',
         pillar: 'transact',
-        weight: 8,
-        status,
-        detail: `Shipping policy ${s ? 'found' : 'not found'} · returns/refund policy ${r ? 'found' : 'not found'}.`,
-      }),
-    );
+        weight: 5,
+        status: band(feed.variantAvailabilityPct, 90, 60),
+        detail: `${feed.variantAvailabilityPct}% of products expose an availability flag on every variant (size/colour level stock).`,
+      };
+    } else if (sampled > 0) {
+      const pct = pagePct(evidence.withCompleteOffer);
+      spec = {
+        id: 'variant_availability',
+        label: 'Per-variant stock readable',
+        pillar: 'transact',
+        weight: 5,
+        status: pct >= 100 ? 'warn' : 'fail',
+        detail:
+          pct >= 100
+            ? 'No feed: product-level availability is readable from Offer schema, but per-variant stock is not exposed.'
+            : 'No feed and no per-variant availability exposed — an agent cannot tell which size/colour it can actually order.',
+      };
+    } else {
+      spec = { id: 'variant_availability', label: 'Per-variant stock readable', pillar: 'transact', weight: 5, status: 'na', detail: 'No feed and no product page could be sampled.' };
+    }
+    checks.push(toCheck(spec));
+  }
+  {
+    const s = snapshot.shipping;
+    const r = snapshot.returns;
+    let status: Check['status'];
+    let detail: string;
+    if (s.found && r.found) {
+      const bothVerified = s.verified && r.verified;
+      if (bothVerified && r.hasWindow) {
+        status = 'pass';
+        detail = 'Shipping and returns policies fetched, with an explicit return window an agent can read.';
+      } else if (bothVerified) {
+        status = 'warn';
+        detail = 'Shipping and returns policy pages found, but the returns page states no explicit window (e.g. "within 30 days").';
+      } else {
+        status = 'warn';
+        detail = 'Policies linked from the storefront but not verified as substantive pages at stable URLs.';
+      }
+    } else if (s.found || r.found) {
+      status = 'warn';
+      detail = `Only one policy found — shipping ${s.found ? 'found' : 'missing'} · returns ${r.found ? 'found' : 'missing'}.`;
+    } else {
+      status = 'fail';
+      detail = 'Neither a shipping nor a returns policy could be found — agentic checkout surfaces these before completing a purchase.';
+    }
+    checks.push(toCheck({ id: 'policies', label: 'Shipping + returns policies (with terms)', pillar: 'transact', weight: 9, status, detail }));
   }
 
   // ---------------- aggregate ----------------
   const pillarDefs: { key: PillarResult['key']; label: string; weight: number }[] = [
-    { key: 'discover', label: 'Discover — can agents fetch + read the store?', weight: 35 },
-    { key: 'evaluate', label: 'Evaluate — can agents parse + trust the products?', weight: 40 },
+    { key: 'discover', label: 'Discover — can agents fetch + read the store?', weight: 30 },
+    { key: 'evaluate', label: 'Evaluate — can agents parse + trust the products?', weight: 45 },
     { key: 'transact', label: 'Transact — can an agent complete a purchase?', weight: 25 },
   ];
   const pillars: PillarResult[] = pillarDefs.map((def) => {
     const pchecks = checks.filter((c) => c.pillar === def.key);
     const scorable = pchecks.filter((c) => c.status !== 'na');
     const possible = scorable.reduce((s, c) => s + c.weight, 0);
+    const totalWeight = pchecks.reduce((s, c) => s + c.weight, 0);
     const earned = scorable.reduce((s, c) => s + c.earned, 0);
+    const evidenceCoverage = totalWeight > 0 ? Math.round((100 * possible) / totalWeight) : 0;
     return {
       key: def.key,
       label: def.label,
       weight: def.weight,
+      evidenceCoverage,
+      insufficientEvidence: evidenceCoverage < 50,
       score: possible > 0 ? Math.round((100 * earned) / possible) : 0,
       checks: pchecks,
     };
   });
   const score = Math.round(pillars.reduce((s, p) => s + (p.score * p.weight) / 100, 0));
 
-  const requiredAvg = feed
-    ? (feed.coverage.title + feed.coverage.image + feed.coverage.price + feed.coverage.description) / 4
-    : 0;
+  const requiredCheck = checks.find((c) => c.id === 'catalog_required_fields')!;
+  const catalogCheck = checks.find((c) => c.id === 'catalog_machine_readable')!;
   const robotsCheck = checks.find((c) => c.id === 'robots_ai_access')!;
+  const priceCheck = checks.find((c) => c.id === 'machine_price_availability')!;
+  const policiesCheck = checks.find((c) => c.id === 'policies')!;
+  const requiredPct = feed
+    ? (feed.coverage.title + feed.coverage.image + feed.coverage.price + feed.coverage.description) / 4
+    : evidence.requiredFieldPct;
+
   const agentBuyable =
     robotsCheck.status !== 'fail' &&
-    feed !== null &&
-    requiredAvg >= 80 &&
+    catalogCheck.status !== 'fail' &&
+    requiredCheck.status !== 'na' &&
+    requiredPct >= 80 &&
     platform.agenticCheckoutRail !== 'none-detected' &&
-    snapshot.shippingPolicyFound &&
-    snapshot.returnsPolicyFound;
+    priceCheck.status !== 'fail' &&
+    priceCheck.status !== 'na' &&
+    policiesCheck.status === 'pass';
 
   const fixes = checks
     .filter((c) => c.status === 'fail' || c.status === 'warn')
@@ -353,6 +451,7 @@ export function scoreSnapshot(snapshot: StoreSnapshot): ScoreResult {
     pillars,
     platform,
     feed,
+    productSampling: { sampled, source: snapshot.productSource },
     fixes,
     fetchErrors: snapshot.fetchErrors,
   };
