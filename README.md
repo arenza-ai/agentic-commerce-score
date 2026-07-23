@@ -2,7 +2,7 @@
 
 **Can AI shopping agents find, evaluate, and buy from your store?**
 
-One command, ~8 GET requests, a deterministic 0–100 answer:
+One command, ~12 GET requests, a deterministic 0–100 answer:
 
 ```bash
 npx agentic-commerce-score your-store.com
@@ -13,27 +13,27 @@ Real output (allbirds.com, scanned 2026-07-23 with rubric v0.2 — rerun it your
 ```text
   Agentic Commerce Score v0.2  ·  allbirds.com
 
-  82/100  grade B   agent-buyable ✓   platform: shopify
+  78/100  grade B   not agent-buyable ✗   platform: shopify
 
   100  ████████████████████  Discover — can agents fetch + read the store? (30%)
    60  ████████████░░░░░░░░  Evaluate — can agents parse + trust the products? (45%)
-  100  ████████████████████  Transact — can an agent complete a purchase? (25%)
+   82  ████████████████░░░░  Transact — can an agent complete a purchase? (25%)
 
   ✓ AI crawlers allowed (robots.txt)
   ✓ Homepage readable without JavaScript
       Homepage serves ~17291 visible words of real HTML (no JS needed).
   ✓ Required fields (title/image/price/description)
       Coverage over 100 feed products: title 100% · image 100% · price 100% · description 100% (avg 100%).
-  ✗ Product JSON-LD (Offer: price/currency/availability)
-      0/3 sampled product pages carry Product JSON-LD with a complete Offer.
   ✗ Brand + product identifier (sku/gtin/mpn)
-  ✓ Machine-readable price + availability
-      Feed exposes price on 100% and availability on 100% of products.
+      0/3 sampled product pages expose both brand and an identifier.
+  ✗ AggregateRating in Product JSON-LD
+      0/3 sampled product pages expose machine-readable review ratings.
   …
 
   Top fixes
-  1. Add complete Product JSON-LD on product pages: an Offer with price + priceCurrency + availability.
-  2. Publish brand plus a product identifier (sku / gtin / mpn) — agents match and dedupe by identifier…
+  1. Publish brand plus a product identifier (sku / gtin / mpn) in Product JSON-LD — agents match,
+     dedupe and price-compare products by identifier; without one your listing is an orphan.
+  2. Expose reviews as AggregateRating in Product JSON-LD (ratingValue + reviewCount)…
 ```
 
 ## Why this exists
@@ -95,11 +95,13 @@ Zero runtime dependencies. Node ≥ 18.17.
 
 ## Dataset — State of Agentic Commerce
 
-`data/` carries periodic ACS scans of leading DTC storefronts. **2026-07:** of
-857 Shopify-detected storefronts (from 955 public-list candidates), **81% are
-agent-buyable**; the top gaps are incomplete Product JSON-LD (13% fail),
-closed/absent product feeds (10%), and thin descriptions (8%). Mean score 90,
-median 97 — the failing tail includes household names. Full methodology +
+`data/` carries periodic ACS scans of leading DTC storefronts. **2026-07 (rubric
+v0.2):** of 857 Shopify-detected storefronts (from 955 public-list candidates),
+only **63% are agent-buyable** — more than 1 in 3 cannot complete a sale to an
+AI agent. The widest gaps are machine-readable review ratings (**73% fail**),
+product identifiers such as sku/gtin/mpn (**43% fail** — agents cannot match or
+dedupe those products), and image alt text (32% fail). Mean 84, median 87, and
+105 stores score a grade A yet still miss the buyable bar. Full methodology +
 per-store breakdowns: <https://arenza.ai/agentic-commerce-score/report>. PRs
 adding stores to the candidate list are welcome.
 
