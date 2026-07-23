@@ -34,6 +34,29 @@ export interface RunScoreOptions {
 
 /** An explicit return window ("within 30 days", "60-day returns") is what an agent can act on. */
 const RETURN_WINDOW_RE = /\b(\d{1,3})\s*[- ]?\s*(calendar\s+|business\s+|working\s+)?(day|days|week|weeks|month|months)\b/i;
+/** The window only counts when it is about returning something. */
+const RETURN_CONTEXT_RE = /\b(return|returns|returned|returning|refund|refunds|refunded|exchange|exchanges)\b/i;
+
+/**
+ * True when the page states a return window in a returns context.
+ *
+ * Both halves matter: a bare "30 days" can come from a shipping estimate or an
+ * embedded subscription plan ("Delivery every 2 weeks" in a JSON blob — a real
+ * false positive found while validating this check), so scripts/styles are
+ * stripped and the number must share a sentence with return/refund/exchange.
+ */
+export function hasReturnWindow(html: string): boolean {
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ');
+  for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+    if (RETURN_CONTEXT_RE.test(sentence) && RETURN_WINDOW_RE.test(sentence)) return true;
+  }
+  return false;
+}
 
 async function fetchPage(url: string, timeoutMs: number): Promise<{ page: FetchedPage | null; error?: string }> {
   const res = await fetchText(url, timeoutMs);
@@ -48,20 +71,28 @@ function linkPresent(html: string | undefined, re: RegExp): boolean {
   return hrefs.some((h) => re.test(h));
 }
 
+/**
+ * Policy pages are frequently very large (25k–50k words of legal text is
+ * normal), so they get a longer budget than a regular fetch and one retry on a
+ * transient failure. Validation against live stores showed the default timeout
+ * silently failing real, substantive policy pages — which would have overstated
+ * how many merchants lack them.
+ */
 async function fetchPolicy(
   url: string,
   timeoutMs: number,
   wantWindow: boolean,
 ): Promise<PolicyEvidence | null> {
-  const res = await fetchText(url, timeoutMs);
-  if (!res.ok) return null;
-  const text = res.text;
-  if (visibleWordCount(text) <= 100) return null;
-  const evidence: PolicyEvidence = { found: true, verified: true };
-  if (wantWindow) {
-    const body = text.replace(/<[^>]*>/g, ' ');
-    evidence.hasWindow = RETURN_WINDOW_RE.test(body);
+  const budget = Math.max(timeoutMs, 20_000);
+  let res = await fetchText(url, budget);
+  if (!res.ok && (res.status === 0 || res.status === 429 || res.status >= 500)) {
+    await new Promise((r) => setTimeout(r, 600));
+    res = await fetchText(url, budget);
   }
+  if (!res.ok) return null;
+  if (visibleWordCount(res.text) <= 100) return null;
+  const evidence: PolicyEvidence = { found: true, verified: true };
+  if (wantWindow) evidence.hasWindow = hasReturnWindow(res.text);
   return evidence;
 }
 
